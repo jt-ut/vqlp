@@ -12,8 +12,8 @@ def lp_norm_stable(x, p):
     """
     Computes the Lp norm of row vectors using a numerically stable log-sum-exp method.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     x : np.ndarray
         Input array. Norms are computed along the last axis.
     p : float
@@ -21,8 +21,8 @@ def lp_norm_stable(x, p):
         prevents division by zero at p=0; for any realistic p > 0 the
         numerical impact is negligible.
 
-    Returns:
-    --------
+    Returns
+    -------
     np.ndarray
         Lp norm along the last axis, with that axis kept (shape (..., 1)).
     """
@@ -45,8 +45,8 @@ def lp_centroid_objective_p_root(c, X, p):
     to candidate centroid c. This is the objective minimized when finding the
     Lp geometric median of a cluster.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     c : np.ndarray, shape (d,)
         Candidate centroid.
     X : np.ndarray, shape (N, d)
@@ -54,8 +54,8 @@ def lp_centroid_objective_p_root(c, X, p):
     p : float
         Order of the norm.
 
-    Returns:
-    --------
+    Returns
+    -------
     float
         Objective value.
     """
@@ -67,8 +67,8 @@ def lp_centroid_gradient_p_root(c, X, p):
     """
     Computes the gradient of lp_centroid_objective_p_root with respect to c.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     c : np.ndarray, shape (d,)
         Candidate centroid.
     X : np.ndarray, shape (N, d)
@@ -76,8 +76,8 @@ def lp_centroid_gradient_p_root(c, X, p):
     p : float
         Order of the norm.
 
-    Returns:
-    --------
+    Returns
+    -------
     np.ndarray, shape (d,)
         Gradient vector.
     """
@@ -108,14 +108,14 @@ def exp_kernel_bw_perplexity(dists):
     of neighbors. This ensures the effective number of connected neighbors
     equals log2(k), adapting the kernel width to local density.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     dists : np.ndarray
         1D array of distances from a single query point to its k nearest
         neighbors. Need not be sorted.
 
-    Returns:
-    --------
+    Returns
+    -------
     float
         Calibrated sigma. Returns 1.0 as a safe fallback for degenerate
         inputs (empty array, all-equal distances, or no root found).

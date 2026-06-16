@@ -40,8 +40,8 @@ class VQRecaller:
         """
         Initialize VQRecaller.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         p : float, default=2
             Order of the Lp distance metric. Any positive value is supported
             for exact search (index_type="flat"). Approximate search
@@ -100,8 +100,8 @@ class VQRecaller:
         Mode 2 - Finalize: Provide no arguments to compute derived quantities 
                           from existing BMU/QE (assumes update_BMU() was called)
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array-like, shape (N, d), optional
             Data matrix with N observations and d features
         W : array-like, shape (M, d), optional  
@@ -111,8 +111,8 @@ class VQRecaller:
         max_bmu : int, optional
             Number of BMUs to track. If None, uses self.max_bmu
             
-        Returns:
-        --------
+        Returns
+        -------
         self : VQRecaller
             Returns self for method chaining
         """
@@ -158,8 +158,8 @@ class VQRecaller:
         This is the computationally expensive part of recall analysis.
         Can be called repeatedly during iterative fitting algorithms.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array-like, shape (N, d)
             Data matrix with N observations and d features
         W : array-like, shape (M, d)
@@ -264,8 +264,8 @@ class VQRecaller:
         """
         Reconstruct data using the quantizer.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         W : array-like, shape (M, d)
             Prototype matrix with M prototypes and d features
         X : array-like, shape (N, d)
@@ -275,8 +275,8 @@ class VQRecaller:
             - "hard": Use closest prototype for each observation
             - "soft": Weighted average using UMAP-style local connectivity
             
-        Returns:
-        --------
+        Returns
+        -------
         np.ndarray : Reconstructed data with shape (N, d)
         """
         if self.BMU is None:
@@ -350,8 +350,8 @@ class VQRecaller:
         """
         Get a summary of the recall analysis results.
         
-        Returns:
-        --------
+        Returns
+        -------
         dict : Summary statistics
         """
         if self.BMU is None:
@@ -387,8 +387,8 @@ class VQFitter:
         """
         Initialize the VQ Fitter.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         M : int
             Number of prototypes to create
         p : float, default=2
@@ -416,8 +416,8 @@ class VQFitter:
         
         Defaults to "kmeans" when p=2, and "IRLS" otherwise.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array-like, shape (N, d)
             Training data matrix
         method : str, optional
@@ -429,8 +429,8 @@ class VQFitter:
         **kwargs : additional arguments
             Method-specific parameters (see individual _fit_* methods).
             
-        Returns:
-        --------
+        Returns
+        -------
         self : VQFitter
             Returns self for method chaining
         """
@@ -468,8 +468,8 @@ class VQFitter:
         """
         Fit by randomly sampling prototypes from X.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array, shape (N, d)
             Training data
         """
@@ -483,8 +483,8 @@ class VQFitter:
         """
         Fit using Iteratively Reweighted Least Squares.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array, shape (N, d)
             Training data
         tol_RFstab : float, default=0.01
@@ -547,8 +547,8 @@ class VQFitter:
         Update prototype vectors using IRLS for minimizing the sum of Lp norms.
         Uses lp_norm_stable for numerical stability at high p values.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array, shape (N, d)
             Training data matrix
         """
@@ -581,8 +581,8 @@ class VQFitter:
         """
         Fit using gradient descent on the Lp centroid objective.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array, shape (N, d)
             Training data
         tol_RFstab : float, default=0.01
@@ -645,8 +645,8 @@ class VQFitter:
         Update prototype vectors using gradient descent for Lp centroids.
         Uses L-BFGS-B with the analytic gradient. For p=2 shortcuts to the mean.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array, shape (N, d)
             Training data matrix
         """
@@ -675,8 +675,8 @@ class VQFitter:
         """
         Fit using PAM (Partitioning Around Medoids) via FasterPAM.
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array, shape (N, d)
             Training data
         distX : array, shape (N, N), optional
@@ -711,8 +711,8 @@ class VQFitter:
         """
         Fit using FAISS k-means (p=2 only).
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array, shape (N, d)
             Training data
         niter : int, default=20
@@ -779,8 +779,8 @@ class VQFitter:
         BMU and QE are computed immediately from X, keeping the object in a
         consistent state — the same guarantee provided by all _fit_* methods.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         W : array-like, shape (M, d)
             Prototype matrix. Must have exactly self.M rows. If the data
             dimensionality d is already known (from a prior fit or recall),
@@ -788,8 +788,8 @@ class VQFitter:
         X : array-like, shape (N, d)
             Data matrix used to compute BMU and QE.
 
-        Returns:
-        --------
+        Returns
+        -------
         self : VQFitter
             Returns self for method chaining
         """
@@ -825,13 +825,13 @@ class VQFitter:
         If X is None, finalizes recall analysis on training data (assuming
         BMU has been computed during fitting).
         
-        Parameters:
-        -----------
+        Parameters
+        ----------
         X : array-like, shape (N, d), optional
             Data matrix for recall analysis. If None, finalizes training recall.
             
-        Returns:
-        --------
+        Returns
+        -------
         self : VQFitter
             Returns self for method chaining
         """
@@ -850,8 +850,8 @@ class VQFitter:
         """
         Get a summary of the fitted model and recall analysis.
         
-        Returns:
-        --------
+        Returns
+        -------
         dict : Summary statistics
         """
         summary = {
