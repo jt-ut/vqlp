@@ -34,9 +34,12 @@ plugins:
             separate_signature: true
             show_signature_annotations: true
             merge_init_into_class: true
+  - mkdocs-jupyter:
+      execute: false
 
 nav:
   - Home: index.md
+  - Example: example.ipynb
   - API Reference: api.md
 
 markdown_extensions:
