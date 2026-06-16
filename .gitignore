@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# vqlp example output
+vqlp_example.png
+
+# Data & model artifacts (uncomment/adjust to your needs)
+# data/
+# *.npy
+# *.npz
+# *.faiss

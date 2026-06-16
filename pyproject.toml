@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vqlp"
+version = "0.1.0"
+description = "Vector Quantizer with arbitrary Lp distance metrics"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Josh Taylor", email = "joshtaylor@utexas.edu"}
+]
+maintainers = [
+    {name = "Josh Taylor", email = "joshtaylor@utexas.edu"}
+]
+keywords = ["vector-quantization", "machine-learning", "clustering", "lp-norms"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.19.0",
+    "scipy>=1.7.0",
+]
+
+[project.optional-dependencies]
+# Optional dependencies for different features
+fast = [
+    "faiss-cpu>=1.7.0",  # For fast nearest neighbor search
+]
+clustering = [
+    "scikit-learn>=1.0.0",  # For K-means
+    "kmedoids>=0.5.0",      # For PAM algorithm
+]
+# All optional dependencies
+all = [
+    "faiss-cpu>=1.7.0",
+    "scikit-learn>=1.0.0", 
+    "kmedoids>=0.5.0",
+]
+# Development dependencies
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "mypy",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/vector-quantizer-lp"
+Repository = "https://github.com/yourusername/vector-quantizer-lp"
+Documentation = "https://github.com/yourusername/vector-quantizer-lp#readme"
+"Bug Tracker" = "https://github.com/yourusername/vector-quantizer-lp/issues"
+
+# Tell setuptools where to find the package
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Additional setuptools configuration
+[tool.setuptools.package-data]
+vqlp = ["py.typed"]  # For type checking support
+
+# Tool configurations
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--cov=vqlp --cov-report=html --cov-report=term"
+
+[tool.mypy]
+python_version = "3.8"
+packages = ["vqlp"]
+strict = true
