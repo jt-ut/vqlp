@@ -27,3 +27,6 @@ vqlp_example.png
 # *.npy
 # *.npz
 # *.faiss
+
+# Scripts 
+gitdeploy.sh
