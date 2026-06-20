@@ -973,7 +973,7 @@ class VQFitter:
         print(f"Prototypes set externally. MQE: {np.mean(self.recaller.QE[:, 0]):.6f}")
         return self
 
-    def recall(self, X=None):
+    def recall(self, X=None, labels=None):
         """
         Perform recall analysis using the fitted prototypes.
         
@@ -985,6 +985,10 @@ class VQFitter:
         ----------
         X : array-like, shape (N, d), optional
             Data matrix for recall analysis. If None, finalizes training recall.
+        labels : array-like, shape (N,), optional
+            Observation labels. Any hashable type is accepted (int, str, float,
+            etc.). If provided, recall_labels() is called automatically after
+            the main recall pipeline to compute WL, WL_Dist, and WL_Purity.
             
         Returns
         -------
@@ -996,9 +1000,9 @@ class VQFitter:
         
         if X is not None:
             X = np.array(X)
-            self.recaller.recall(X, self.W)
+            self.recaller.recall(X, self.W, labels=labels)
         else:
-            self.recaller.recall()
+            self.recaller.recall(labels=labels)
         
         return self
     
@@ -1024,4 +1028,5 @@ class VQFitter:
             summary.update(recall_summary)
         
         return summary
-
+    
+    
