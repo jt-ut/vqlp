@@ -81,18 +81,25 @@ class VQRecaller:
         # Recall products (computed by recall())
         self.BMU = None          # Best Matching Unit indices (N, max_bmu)
         self.QE = None           # Quantization Errors (N, max_bmu)
+        self.AFF = None          # Affinities (N, max_bmu): Neuralware-form soft weights from QE
         self.RF = None           # Receptive Field: list of observation indices per prototype
         self.RFSize = None       # Size of Receptive Field per prototype
         self.CONN = None         # Connectivity matrix (sparse)
         self.CONN_nhbs = None    # List of nonzero indices for each row of CONN
         self.CONN_nhbs_size = None  # Size of each CONN_nhbs[i] as numpy array
-        
+
+        # Label recall products (computed by recall_labels())
+        self.WL = None           # Winning label per prototype, object array (M,); None for empty RFs
+        self.WL_Dist = None      # Fuzzy label frequency table (M, n_unique_labels), row-normalized
+        self.WL_Purity = None    # Hellinger-based purity score per prototype (M,)
+        self.WL_unq = None       # Sorted unique label values; column j of WL_Dist corresponds to WL_unq[j]
+
         # Store shape info for validation (don't store X itself)
         self._M = None           # Number of prototypes
         self._N = None           # Number of observations
         self._d = None           # Dimensionality
     
-    def recall(self, X=None, W=None, p=None, max_bmu=None):
+    def recall(self, X=None, W=None, p=None, max_bmu=None, labels=None):
         """
         Perform recall analysis. Can operate in two modes:
         
@@ -110,6 +117,11 @@ class VQRecaller:
             Lp distance order. If None, uses self.p
         max_bmu : int, optional
             Number of BMUs to track. If None, uses self.max_bmu
+        labels : array-like, shape (N,), optional
+            Observation labels. Any hashable type is accepted (int, str, float,
+            etc.). If provided, recall_labels() is called automatically after
+            the main recall pipeline. Can also be called independently via
+            recall_labels() on an already-recalled object.
             
         Returns
         -------
@@ -147,6 +159,9 @@ class VQRecaller:
         # Compute the derived recall products (cheap operations)
         self._compute_receptive_fields()
         self._compute_connectivity_matrix()
+        
+        if labels is not None:
+            self.recall_labels(labels)
         
         print(f"Recall analysis complete. MQE: {np.mean(self.QE[:, 0]):.6f}")
         return self
@@ -186,6 +201,7 @@ class VQRecaller:
 
         self.BMU = indices.astype(int)
         self.QE = distances.astype(X.dtype)
+        self._compute_affinity()
 
     def _build_index(self, W_f32):
         """Build and populate the FAISS index for prototype set W."""
@@ -210,6 +226,35 @@ class VQRecaller:
         index.add(W_f32)
         index.nprobe = self.nprobe if self.nprobe is not None else max(1, nlist // 10)
         return index
+
+    def _compute_affinity(self):
+        """
+        Compute affinity matrix AFF from quantization errors QE.
+
+        Uses the Neuralware form: the first BMU always gets affinity 1 before
+        normalization, and each subsequent BMU k gets QE[:,0] / (QE[:,0] + QE[:,k]).
+        Rows are then normalized to sum to 1. Division-by-zero entries (when both
+        QE[:,0] and QE[:,k] are zero, i.e. the observation sits exactly on a
+        prototype) are set to 0 before normalization, which concentrates all
+        weight on the first BMU.
+
+        This mirrors cpp_QE2Affinity() from AnnoyVQRecall.hpp.
+
+        Result is stored as self.AFF with the same shape as self.QE.
+        """
+        AFF = np.ones_like(self.QE)  # column 0 = 1 for all rows
+        q0 = self.QE[:, 0]
+        for k in range(1, self.QE.shape[1]):
+            denom = q0 + self.QE[:, k]
+            # Where denom == 0, both prototypes coincide with the point;
+            # set to 0 so row-normalization assigns all weight to BMU 0.
+            with np.errstate(invalid="ignore", divide="ignore"):
+                AFF[:, k] = np.where(denom > 0, q0 / denom, 0.0)
+        # Row-normalize
+        row_sums = AFF.sum(axis=1, keepdims=True)
+        # row_sums should always be > 0 (col 0 is 1), but guard anyway
+        AFF = np.where(row_sums > 0, AFF / row_sums, AFF)
+        self.AFF = AFF
 
     def _compute_receptive_fields(self):
         """
@@ -259,6 +304,106 @@ class VQRecaller:
         self.CONN_nhbs_size = np.array([len(nhbs) for nhbs in self.CONN_nhbs], dtype=int)
         
         print("Connectivity matrix computed.")
+
+    def recall_labels(self, labels):
+        """
+        Compute per-prototype label summaries from observation labels.
+
+        Must be called after update_BMU() (or recall()) so that self.BMU,
+        self.AFF, self.RF, and self.RFSize are available.
+
+        For each observation i, its label receives fractional credit distributed
+        across all max_bmu prototypes in proportion to their affinity weights
+        (self.AFF[i, :]). This produces a fuzzy frequency table (WL_Dist) whose
+        rows are then normalized to probability distributions. The winning label
+        per prototype is the argmax of that distribution, and purity is derived
+        from the Hellinger distance between the distribution and the ideal
+        one-hot encoding of the winner.
+
+        This mirrors VQRecallLabels_worker / cpp_RecallLabels() from
+        AnnoyVQRecall.hpp.
+
+        Parameters
+        ----------
+        labels : array-like, shape (N,)
+            Observation labels. Any hashable type is accepted (int, str,
+            float, etc.). Length must equal the number of observations used
+            in the most recent update_BMU() / recall() call.
+
+        Returns
+        -------
+        self : VQRecaller
+            Returns self for method chaining.
+
+        Attributes set
+        --------------
+        WL : np.ndarray of object, shape (M,)
+            Winning label for each prototype. None for prototypes whose
+            receptive field is empty (RFSize == 0).
+        WL_Dist : np.ndarray of float, shape (M, n_unique_labels)
+            Row-normalized fuzzy label frequency table. Column j corresponds
+            to WL_unq[j]. Rows for empty RFs are all-zero.
+        WL_Purity : np.ndarray of float, shape (M,)
+            Hellinger-based purity score in [0, 1]. 1 means all affinity mass
+            falls on a single label; 0 for empty RFs.
+        WL_unq : np.ndarray, shape (n_unique_labels,)
+            Sorted unique label values. Use to interpret WL_Dist columns.
+        """
+        if self.BMU is None or self.AFF is None:
+            raise RuntimeError(
+                "BMU and AFF must be populated first. Call update_BMU() or recall() before recall_labels()."
+            )
+
+        labels = np.asarray(labels)
+        if labels.shape[0] != self._N:
+            raise ValueError(
+                f"labels has {labels.shape[0]} entries but recall used {self._N} observations."
+            )
+
+        # Discover label universe and build index map {label -> col index}
+        WL_unq, label_indices = np.unique(labels, return_inverse=True)
+        n_labels = len(WL_unq)
+
+        # Accumulate fuzzy frequency table via scatter-add.
+        # For each of the max_bmu columns k, every observation i contributes
+        # AFF[i, k] to the cell (BMU[i, k], label_col_of_i).
+        WL_Dist = np.zeros((self._M, n_labels), dtype=float)
+        for k in range(self.max_bmu):
+            proto_indices = self.BMU[:, k]          # shape (N,)
+            aff_weights   = self.AFF[:, k]          # shape (N,)
+            # Scatter-add: WL_Dist[proto_indices[i], label_indices[i]] += aff_weights[i]
+            np.add.at(WL_Dist, (proto_indices, label_indices), aff_weights)
+
+        # Row-normalize to get probability distributions; leave empty-RF rows as zeros
+        row_sums = WL_Dist.sum(axis=1, keepdims=True)
+        active = (row_sums > 0).ravel()             # boolean mask of non-empty RFs
+        WL_Dist[active] /= row_sums[active]
+
+        # Winning label and Hellinger purity
+        WL = np.empty(self._M, dtype=object)        # object dtype accepts any label type
+        WL[:] = None                                 # default: no label for empty RFs
+        WL_Purity = np.zeros(self._M, dtype=float)
+
+        winner_cols = np.argmax(WL_Dist, axis=1)    # shape (M,); 0 for empty rows (harmless)
+        for i in np.where(active)[0]:
+            WL[i] = WL_unq[winner_cols[i]]
+            p_winner = WL_Dist[i, winner_cols[i]]
+            # Hellinger distance to a perfect one-hot: sqrt(1 - sqrt(p_winner))
+            # Purity = 1 - hell_dist (similarity, not distance)
+            hell_dist = np.sqrt(max(0.0, 1.0 - np.sqrt(p_winner)))
+            WL_Purity[i] = 1.0 - hell_dist
+
+        self.WL      = WL
+        self.WL_Dist = WL_Dist
+        self.WL_Purity = WL_Purity
+        self.WL_unq  = WL_unq
+
+        n_labeled = int(active.sum())
+        print(
+            f"Label recall complete. {n_labeled}/{self._M} prototypes labeled "
+            f"({n_labels} unique labels). Mean purity: {WL_Purity[active].mean():.4f}"
+        )
+        return self
     
     def reconstruct(self, W, X, method="hard"):
         """
@@ -357,7 +502,7 @@ class VQRecaller:
         if self.BMU is None:
             return {"status": "No recall analysis performed"}
         
-        return {
+        summary = {
             "M": self._M,                    # Number of prototypes
             "N": self._N,                    # Number of observations  
             "d": self._d,                    # Dimensionality
@@ -369,8 +514,19 @@ class VQRecaller:
             "largest_rf_size": np.max(self.RFSize) if self.RFSize is not None else 0,
             "connectivity_edges": self.CONN.nnz // 2 if self.CONN is not None else 0,
             "mean_connectivity_degree": np.mean(self.CONN_nhbs_size) if self.CONN_nhbs_size is not None else 0,
-            "max_connectivity_degree": np.max(self.CONN_nhbs_size) if self.CONN_nhbs_size is not None else 0
+            "max_connectivity_degree": np.max(self.CONN_nhbs_size) if self.CONN_nhbs_size is not None else 0,
         }
+
+        if self.WL is not None:
+            active = self.RFSize > 0
+            summary.update({
+                "n_unique_labels":       len(self.WL_unq),
+                "labeled_prototypes":    int(active.sum()),
+                "mean_label_purity":     float(self.WL_Purity[active].mean()) if active.any() else float("nan"),
+                "min_label_purity":      float(self.WL_Purity[active].min())  if active.any() else float("nan"),
+            })
+
+        return summary
 
 class VQFitter:
     """
@@ -868,3 +1024,4 @@ class VQFitter:
             summary.update(recall_summary)
         
         return summary
+
