@@ -1361,7 +1361,7 @@ W must match it; otherwise d is inferred from W.</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span class="nf">recall</span><span class="p">(</span><span class="n">X</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">recall</span><span class="p">(</span><span class="n">X</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -1393,6 +1393,24 @@ BMU has been computed during fitting).</p>
             <td>
               <div class="doc-md-description">
                 <p>Data matrix for recall analysis. If None, finalizes training recall.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>labels</code>
+            </td>
+            <td>
+                  <code>(<span title="array">array</span> - <span title="like">like</span>, <span title="shape">shape</span>(<span title="N">N</span>))</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Observation labels. Any hashable type is accepted (int, str, float,
+etc.). If provided, recall_labels() is called automatically after
+the main recall pipeline to compute WL, WL_Dist, and WL_Purity.</p>
               </div>
             </td>
             <td>
@@ -1455,7 +1473,11 @@ BMU has been computed during fitting).</p>
 <span class="normal">1000</span>
 <span class="normal">1001</span>
 <span class="normal">1002</span>
-<span class="normal">1003</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">recall</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="normal">1003</span>
+<span class="normal">1004</span>
+<span class="normal">1005</span>
+<span class="normal">1006</span>
+<span class="normal">1007</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">recall</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Perform recall analysis using the fitted prototypes.</span>
 
@@ -1467,6 +1489,10 @@ BMU has been computed during fitting).</p>
 <span class="sd">    ----------</span>
 <span class="sd">    X : array-like, shape (N, d), optional</span>
 <span class="sd">        Data matrix for recall analysis. If None, finalizes training recall.</span>
+<span class="sd">    labels : array-like, shape (N,), optional</span>
+<span class="sd">        Observation labels. Any hashable type is accepted (int, str, float,</span>
+<span class="sd">        etc.). If provided, recall_labels() is called automatically after</span>
+<span class="sd">        the main recall pipeline to compute WL, WL_Dist, and WL_Purity.</span>
 
 <span class="sd">    Returns</span>
 <span class="sd">    -------</span>
@@ -1478,9 +1504,9 @@ BMU has been computed during fitting).</p>
 
     <span class="k">if</span> <span class="n">X</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">X</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">X</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">recaller</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">W</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">recaller</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">W</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="n">labels</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">recaller</span><span class="o">.</span><span class="n">recall</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">recaller</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="n">labels</span><span class="o">=</span><span class="n">labels</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="bp">self</span>
 </code></pre></div></td></tr></table></div>
@@ -1530,11 +1556,7 @@ BMU has been computed during fitting).</p>
 
             <details class="quote">
               <summary>Source code in <code>src/vqlp/vq.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1005</span>
-<span class="normal">1006</span>
-<span class="normal">1007</span>
-<span class="normal">1008</span>
-<span class="normal">1009</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1009</span>
 <span class="normal">1010</span>
 <span class="normal">1011</span>
 <span class="normal">1012</span>
@@ -1551,7 +1573,11 @@ BMU has been computed during fitting).</p>
 <span class="normal">1023</span>
 <span class="normal">1024</span>
 <span class="normal">1025</span>
-<span class="normal">1026</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_summary</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="normal">1026</span>
+<span class="normal">1027</span>
+<span class="normal">1028</span>
+<span class="normal">1029</span>
+<span class="normal">1030</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_summary</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Get a summary of the fitted model and recall analysis.</span>
 

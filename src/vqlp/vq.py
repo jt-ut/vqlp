@@ -36,7 +36,7 @@ class VQRecaller:
     for the search step regardless of input dtype.
     """
     
-    def __init__(self, p=2, max_bmu=2, index_type="flat", nlist=None, nprobe=None):
+    def __init__(self, p=2, max_bmu=2, index_type="flat", nlist=None, nprobe=None, verbose=True):
         """
         Initialize VQRecaller.
         
@@ -62,6 +62,9 @@ class VQRecaller:
         nprobe : int, optional
             (IVF only) Number of cells searched at query time. Higher values
             give better recall at the cost of speed. Defaults to nlist // 10.
+        verbose : bool, default=True
+            If True, print progress messages during recall analysis.
+            Set to False to suppress all terminal output.
         """
         if index_type not in ("flat", "ivf"):
             raise ValueError(f"index_type must be 'flat' or 'ivf', got {index_type!r}")
@@ -77,6 +80,7 @@ class VQRecaller:
         self.index_type = index_type
         self.nlist = nlist
         self.nprobe = nprobe
+        self.verbose = verbose
         
         # Recall products (computed by recall())
         self.BMU = None          # Best Matching Unit indices (N, max_bmu)
@@ -163,7 +167,8 @@ class VQRecaller:
         if labels is not None:
             self.recall_labels(labels)
         
-        print(f"Recall analysis complete. MQE: {np.mean(self.QE[:, 0]):.6f}")
+        if self.verbose:
+            print(f"Recall analysis complete. MQE: {np.mean(self.QE[:, 0]):.6f}")
         return self
     
     def update_BMU(self, X, W):
@@ -268,14 +273,16 @@ class VQRecaller:
             self.RF[first_bmu_idx].append(obs_idx)
         
         self.RFSize = np.array([len(rf_list) for rf_list in self.RF], dtype=int)
-        print("Receptive fields computed.")
+        if self.verbose:
+            print("Receptive fields computed.")
     
     def _compute_connectivity_matrix(self):
         """
         Compute the connectivity matrix (CONN) and neighbor lists (CONN_nhbs).
         """
         if self.max_bmu < 2:
-            print("Warning: max_bmu < 2. Connectivity matrix will be empty.")
+            if self.verbose:
+                print("Warning: max_bmu < 2. Connectivity matrix will be empty.")
             self.CONN = None
             self.CONN_nhbs = None
             self.CONN_nhbs_size = None
@@ -303,7 +310,8 @@ class VQRecaller:
         # Compute sizes of neighbor lists as numpy array
         self.CONN_nhbs_size = np.array([len(nhbs) for nhbs in self.CONN_nhbs], dtype=int)
         
-        print("Connectivity matrix computed.")
+        if self.verbose:
+            print("Connectivity matrix computed.")
 
     def recall_labels(self, labels):
         """
@@ -399,10 +407,11 @@ class VQRecaller:
         self.WL_unq  = WL_unq
 
         n_labeled = int(active.sum())
-        print(
-            f"Label recall complete. {n_labeled}/{self._M} prototypes labeled "
-            f"({n_labels} unique labels). Mean purity: {WL_Purity[active].mean():.4f}"
-        )
+        if self.verbose:
+            print(
+                f"Label recall complete. {n_labeled}/{self._M} prototypes labeled "
+                f"({n_labels} unique labels). Mean purity: {WL_Purity[active].mean():.4f}"
+            )
         return self
     
     def reconstruct(self, W, X, method="hard"):
@@ -488,7 +497,8 @@ class VQRecaller:
                 else:
                     QX[original_idx, :] = np.sum(weights[:, np.newaxis] * W_subset, axis=0) / sum_weights
         
-        print("Soft reconstruction complete.")
+        if self.verbose:
+            print("Soft reconstruction complete.")
         return QX
     
     def get_summary(self):
@@ -539,7 +549,7 @@ class VQFitter:
     
     AVAILABLE_METHODS = ["random", "IRLS", "GD", "PAM", "kmeans"]
     
-    def __init__(self, M, p=2, max_bmu=2, random_state=None):
+    def __init__(self, M, p=2, max_bmu=2, random_state=None, verbose=True):
         """
         Initialize the VQ Fitter.
         
@@ -553,18 +563,22 @@ class VQFitter:
             Number of Best Matching Units (closest prototypes) to track
         random_state : int, optional
             Random seed for reproducible results
+        verbose : bool, default=True
+            If True, print progress messages during fitting and recall.
+            Set to False to suppress all terminal output.
         """
         self.M = int(M)
         self.p = p
         self.max_bmu = max_bmu
         self.random_state = random_state
+        self.verbose = verbose
         self.W = None  # Prototype matrix (M, d)
         
         if self.random_state is not None:
             np.random.seed(self.random_state)
         
         # VQRecaller instance for BMU tracking during fitting
-        self.recaller = VQRecaller(p=self.p, max_bmu=self.max_bmu)
+        self.recaller = VQRecaller(p=self.p, max_bmu=self.max_bmu, verbose=self.verbose)
     
     def fit(self, X, method=None, distX=None, **kwargs):
         """
@@ -617,7 +631,8 @@ class VQFitter:
         elif method == "kmeans":
             self._fit_kmeans(X, **kwargs)
         
-        print(f"Fitting complete using {method} method.")
+        if self.verbose:
+            print(f"Fitting complete using {method} method.")
         return self
             
     def _fit_random(self, X):
@@ -633,7 +648,8 @@ class VQFitter:
         indices = np.random.choice(N, size=self.M, replace=False)
         self.W = X[indices].copy()
         self.recaller.update_BMU(X, self.W)
-        print(f"Randomly sampled {self.M} prototypes from {N} observations")
+        if self.verbose:
+            print(f"Randomly sampled {self.M} prototypes from {N} observations")
     
     def _fit_IRLS(self, X, tol_RFstab=0.01, tol_MQE=1e-4, max_iter=100, init_method="random"):
         """
@@ -673,7 +689,8 @@ class VQFitter:
         prevBMU = self.recaller.BMU[:, 0].copy()
         prevMQE = np.mean(self.recaller.QE[:, 0])
         
-        print(f"Initial MQE: {prevMQE:.6f}")
+        if self.verbose:
+            print(f"Initial MQE: {prevMQE:.6f}")
         
         for iter_num in range(1, max_iter + 1):
             self._update_prototypes_IRLS(X)
@@ -684,19 +701,23 @@ class VQFitter:
             MQE = np.mean(self.recaller.QE[:, 0])
             rel_MQE_change = (MQE - prevMQE) / prevMQE if prevMQE != 0 else 0
             
-            print(f"Iter {iter_num:3d}: RFstab = {RFstab:.4f}, MQE = {MQE:.6f}, rel_MQE_change = {rel_MQE_change:.6f}")
+            if self.verbose:
+                print(f"Iter {iter_num:3d}: RFstab = {RFstab:.4f}, MQE = {MQE:.6f}, rel_MQE_change = {rel_MQE_change:.6f}")
             
             prevBMU = current_BMU.copy()
             prevMQE = MQE
             
             if RFstab < tol_RFstab:
-                print(f"Converged after {iter_num} iterations (RFstab < {tol_RFstab})")
+                if self.verbose:
+                    print(f"Converged after {iter_num} iterations (RFstab < {tol_RFstab})")
                 break
             elif abs(rel_MQE_change) < tol_MQE:
-                print(f"Converged after {iter_num} iterations (|rel_MQE_change| < {tol_MQE})")
+                if self.verbose:
+                    print(f"Converged after {iter_num} iterations (|rel_MQE_change| < {tol_MQE})")
                 break
         else:
-            print(f"Reached maximum iterations ({max_iter}) without convergence")
+            if self.verbose:
+                print(f"Reached maximum iterations ({max_iter}) without convergence")
 
     def _update_prototypes_IRLS(self, X):
         """
@@ -771,7 +792,8 @@ class VQFitter:
         prevBMU = self.recaller.BMU[:, 0].copy()
         prevMQE = np.mean(self.recaller.QE[:, 0])
         
-        print(f"Initial MQE: {prevMQE:.6f}")
+        if self.verbose:
+            print(f"Initial MQE: {prevMQE:.6f}")
         
         for iter_num in range(1, max_iter + 1):
             self._update_prototypes_GD(X)
@@ -782,19 +804,23 @@ class VQFitter:
             MQE = np.mean(self.recaller.QE[:, 0])
             rel_MQE_change = (MQE - prevMQE) / prevMQE if prevMQE != 0 else 0
             
-            print(f"Iter {iter_num:3d}: RFstab = {RFstab:.4f}, MQE = {MQE:.6f}, rel_MQE_change = {rel_MQE_change:.6f}")
+            if self.verbose:
+                print(f"Iter {iter_num:3d}: RFstab = {RFstab:.4f}, MQE = {MQE:.6f}, rel_MQE_change = {rel_MQE_change:.6f}")
             
             prevBMU = current_BMU.copy()
             prevMQE = MQE
             
             if RFstab < tol_RFstab:
-                print(f"Converged after {iter_num} iterations (RFstab < {tol_RFstab})")
+                if self.verbose:
+                    print(f"Converged after {iter_num} iterations (RFstab < {tol_RFstab})")
                 break
             elif abs(rel_MQE_change) < tol_MQE:
-                print(f"Converged after {iter_num} iterations (|rel_MQE_change| < {tol_MQE})")
+                if self.verbose:
+                    print(f"Converged after {iter_num} iterations (|rel_MQE_change| < {tol_MQE})")
                 break
         else:
-            print(f"Reached maximum iterations ({max_iter}) without convergence")
+            if self.verbose:
+                print(f"Reached maximum iterations ({max_iter}) without convergence")
 
     def _update_prototypes_GD(self, X):
         """
@@ -850,10 +876,12 @@ class VQFitter:
         N = X.shape[0]
         
         if distX is None:
-            print(f"Computing {N}x{N} Lp distance matrix for PAM...")
+            if self.verbose:
+                print(f"Computing {N}x{N} Lp distance matrix for PAM...")
             distX = squareform(pdist(X, metric='minkowski', p=self.p))
         
-        print(f"Running FasterPAM with {self.M} medoids...")
+        if self.verbose:
+            print(f"Running FasterPAM with {self.M} medoids...")
         
         kwargs.pop('random_state', None)
         result = fasterpam(diss=distX, medoids=self.M, random_state=self.random_state, **kwargs)
@@ -861,7 +889,8 @@ class VQFitter:
         self.W = X[result.medoids].copy()
         self.recaller.update_BMU(X, self.W)
         
-        print(f"PAM fitting complete. Final MQE: {np.mean(self.recaller.QE[:, 0]):.6f}")
+        if self.verbose:
+            print(f"PAM fitting complete. Final MQE: {np.mean(self.recaller.QE[:, 0]):.6f}")
 
     def _fit_kmeans(self, X, niter=20, nredo=1, init_method="faiss", **kwargs):
         """
@@ -912,16 +941,19 @@ class VQFitter:
 
         if init_method == "current":
             init_centroids = np.ascontiguousarray(self.W, dtype=np.float32)
-            print(f"Running FAISS k-means with {self.M} clusters (niter={niter}, init_method='current')...")
+            if self.verbose:
+                print(f"Running FAISS k-means with {self.M} clusters (niter={niter}, init_method='current')...")
             kmeans.train(X_f32, init_centroids=init_centroids)
         else:
-            print(f"Running FAISS k-means with {self.M} clusters (niter={niter}, nredo={effective_nredo})...")
+            if self.verbose:
+                print(f"Running FAISS k-means with {self.M} clusters (niter={niter}, nredo={effective_nredo})...")
             kmeans.train(X_f32)
 
         self.W = kmeans.centroids.copy().astype(X.dtype)
         self.recaller.update_BMU(X, self.W)
 
-        print(f"K-means complete. Final MQE: {np.mean(self.recaller.QE[:, 0]):.6f}")
+        if self.verbose:
+            print(f"K-means complete. Final MQE: {np.mean(self.recaller.QE[:, 0]):.6f}")
 
     def set_prototypes(self, W, X):
         """
@@ -970,7 +1002,8 @@ class VQFitter:
 
         self.W = W.copy()
         self.recaller.update_BMU(X, self.W)
-        print(f"Prototypes set externally. MQE: {np.mean(self.recaller.QE[:, 0]):.6f}")
+        if self.verbose:
+            print(f"Prototypes set externally. MQE: {np.mean(self.recaller.QE[:, 0]):.6f}")
         return self
 
     def recall(self, X=None, labels=None):
@@ -1028,5 +1061,3 @@ class VQFitter:
             summary.update(recall_summary)
         
         return summary
-    
-    
