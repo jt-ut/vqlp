@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.sparse import lil_matrix
+from scipy.sparse import csr_matrix
 from scipy.spatial.distance import cdist
 from .utils import (
     exp_kernel_bw_perplexity,
@@ -264,21 +264,32 @@ class VQRecaller:
     def _compute_receptive_fields(self):
         """
         Compute receptive fields (RF) and their sizes (RFSize).
+
+        Uses numpy argsort + searchsorted to avoid a Python-level loop over N
+        observations. Observation indices are sorted by their first BMU, then
+        sliced per prototype in O(N log N) total rather than O(N*M).
         """
-        self.RF = [[] for _ in range(self._M)]
-        
-        # Assign each observation to the RF of its closest prototype
-        for obs_idx, bmu_indices_row in enumerate(self.BMU):
-            first_bmu_idx = bmu_indices_row[0]
-            self.RF[first_bmu_idx].append(obs_idx)
-        
-        self.RFSize = np.array([len(rf_list) for rf_list in self.RF], dtype=int)
+        # Sort observation indices by their first BMU assignment
+        order = np.argsort(self.BMU[:, 0], kind='stable')
+        sorted_bmu = self.BMU[order, 0]
+
+        # Find the start/end position of each prototype's block in the sorted array
+        splits = np.searchsorted(sorted_bmu, np.arange(self._M + 1))
+
+        # Slice: RF[i] is the array of observation indices assigned to prototype i
+        self.RF = [order[splits[i]:splits[i + 1]] for i in range(self._M)]
+        self.RFSize = np.diff(splits).astype(int)
+
         if self.verbose:
             print("Receptive fields computed.")
     
     def _compute_connectivity_matrix(self):
         """
         Compute the connectivity matrix (CONN) and neighbor lists (CONN_nhbs).
+
+        Builds CADJ directly from BMU column vectors using scipy sparse matrix
+        construction (COO format), avoiding a Python-level loop over N
+        observations.
         """
         if self.max_bmu < 2:
             if self.verbose:
@@ -287,29 +298,24 @@ class VQRecaller:
             self.CONN_nhbs = None
             self.CONN_nhbs_size = None
             return
-            
-        # Initialize adjacency matrix as LIL for efficient updates
-        cadj_matrix = lil_matrix((self._M, self._M), dtype=int)
-        
-        # Count co-occurrences of 1st and 2nd BMUs
-        for i in range(self.BMU.shape[0]):
-            bmu1_idx = self.BMU[i, 0]  # Closest prototype
-            bmu2_idx = self.BMU[i, 1]  # Second closest prototype
-            cadj_matrix[bmu2_idx, bmu1_idx] += 1
-        
-        # Convert to CSC and make symmetric
-        cadj_csc = cadj_matrix.tocsc()
-        self.CONN = cadj_csc + cadj_csc.transpose()
-        
-        # Compute neighbor lists for efficient access
+
+        # Each observation votes for an edge from its 1st BMU to its 2nd BMU.
+        rows = self.BMU[:, 1]          # 2nd BMU → row of CADJ
+        cols = self.BMU[:, 0]          # 1st BMU → col of CADJ
+        data = np.ones(self._N, dtype=int)
+        cadj = csr_matrix((data, (rows, cols)), shape=(self._M, self._M))
+
+        # Symmetrise to get CONN
+        self.CONN = cadj + cadj.T
+
+        # Extract neighbor lists and their sizes directly from CSR structure
         conn_csr = self.CONN.tocsr()
-        self.CONN_nhbs = [[] for _ in range(self._M)]
-        for i in range(self._M):
-            self.CONN_nhbs[i] = conn_csr.indices[conn_csr.indptr[i]:conn_csr.indptr[i+1]].tolist()
-        
-        # Compute sizes of neighbor lists as numpy array
-        self.CONN_nhbs_size = np.array([len(nhbs) for nhbs in self.CONN_nhbs], dtype=int)
-        
+        self.CONN_nhbs = [
+            conn_csr.indices[conn_csr.indptr[i]:conn_csr.indptr[i + 1]].tolist()
+            for i in range(self._M)
+        ]
+        self.CONN_nhbs_size = np.diff(conn_csr.indptr).astype(int)
+
         if self.verbose:
             print("Connectivity matrix computed.")
 
