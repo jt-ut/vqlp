@@ -88,9 +88,12 @@ class VQRecaller:
         self.AFF = None          # Affinities (N, max_bmu): Neuralware-form soft weights from QE
         self.RF = None           # Receptive Field: list of observation indices per prototype
         self.RFSize = None       # Size of Receptive Field per prototype
-        self.CONN = None         # Connectivity matrix (sparse)
+        self.CONN = None         # Connectivity matrix (sparse, symmetric)
         self.CONN_nhbs = None    # List of nonzero indices for each row of CONN
         self.CONN_nhbs_size = None  # Size of each CONN_nhbs[i] as numpy array
+        self.CADJ = None         # Asymmetric co-adjacency matrix (sparse); CONN = CADJ + CADJ^T
+        self.CADJ_nhbs = None    # List of nonzero indices for each row of CADJ
+        self.CADJ_nhbs_size = None  # Size of each CADJ_nhbs[i] as numpy array
 
         # Label recall products (computed by recall_labels())
         self.WL = None           # Winning label per prototype, object array (M,); None for empty RFs
@@ -285,11 +288,15 @@ class VQRecaller:
     
     def _compute_connectivity_matrix(self):
         """
-        Compute the connectivity matrix (CONN) and neighbor lists (CONN_nhbs).
+        Compute the co-adjacency matrix (CADJ) and its symmetrised form (CONN),
+        along with neighbor lists and sizes for both.
 
-        Builds CADJ directly from BMU column vectors using scipy sparse matrix
-        construction (COO format), avoiding a Python-level loop over N
-        observations.
+        CADJ[i, j] counts how many observations have prototype i as their 1st
+        BMU and prototype j as their 2nd BMU (asymmetric). CONN = CADJ + CADJ^T
+        is the symmetric version used for undirected connectivity.
+
+        Builds both matrices from BMU column vectors using scipy sparse CSR
+        construction, avoiding any Python-level loop over N observations.
         """
         if self.max_bmu < 2:
             if self.verbose:
@@ -297,18 +304,28 @@ class VQRecaller:
             self.CONN = None
             self.CONN_nhbs = None
             self.CONN_nhbs_size = None
+            self.CADJ = None
+            self.CADJ_nhbs = None
+            self.CADJ_nhbs_size = None
             return
 
         # Each observation votes for an edge from its 1st BMU to its 2nd BMU.
         rows = self.BMU[:, 1]          # 2nd BMU → row of CADJ
         cols = self.BMU[:, 0]          # 1st BMU → col of CADJ
         data = np.ones(self._N, dtype=int)
-        cadj = csr_matrix((data, (rows, cols)), shape=(self._M, self._M))
+        self.CADJ = csr_matrix((data, (rows, cols)), shape=(self._M, self._M))
+
+        # Extract CADJ neighbor lists and sizes directly from CSR structure
+        self.CADJ_nhbs = [
+            self.CADJ.indices[self.CADJ.indptr[i]:self.CADJ.indptr[i + 1]].tolist()
+            for i in range(self._M)
+        ]
+        self.CADJ_nhbs_size = np.diff(self.CADJ.indptr).astype(int)
 
         # Symmetrise to get CONN
-        self.CONN = cadj + cadj.T
+        self.CONN = self.CADJ + self.CADJ.T
 
-        # Extract neighbor lists and their sizes directly from CSR structure
+        # Extract CONN neighbor lists and sizes
         conn_csr = self.CONN.tocsr()
         self.CONN_nhbs = [
             conn_csr.indices[conn_csr.indptr[i]:conn_csr.indptr[i + 1]].tolist()
