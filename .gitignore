@@ -30,7 +30,7 @@ vqlp_example.png
 
 # Scripts 
 gitdeploy.sh
-
+gitremakeipynb.sh .
 
 
 
