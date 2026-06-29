@@ -7,6 +7,7 @@ recall analysis with connectivity matrices and reconstruction capabilities.
 """
 
 from .vq import VQFitter, VQRecaller
+from . import cadj_utils
 
 # Package metadata
 __version__ = "0.1.0"
@@ -17,6 +18,7 @@ __email__ = "joshtaylor@utexas.edu"
 __all__ = [
     "VQFitter",
     "VQRecaller", 
+    "cadj_utils"
 ]
 
 # Optional: Add convenience aliases or additional exports
