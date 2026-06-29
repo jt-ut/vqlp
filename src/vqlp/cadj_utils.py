@@ -102,10 +102,22 @@ def pad_CADJ(
         entries.  Dtype matches the input CADJ (integer counts) unless
         ``fill_val`` is changed to a float.
     PCADJ_nhbs : list of list of int, length M
-        Neighbour index lists for each row of PCADJ.
+        Neighbor index lists for each row of PCADJ.
     PCADJ_nhbs_size : np.ndarray, shape (M,), dtype int
         Number of neighbors per prototype in PCADJ.
+
+    Notes
+    -----
+    If all rows already satisfy ``>= min_nhbs``, the function returns
+    immediately with the original input objects (no copy made).  Otherwise
+    an internal copy is made and the originals are never mutated.  Callers
+    should not mutate the returned objects, since in the no-op case they
+    are the same objects that were passed in.
     """
+    # Fast path: nothing to do — return originals without copying
+    if np.all(CADJ_nhbs_size >= min_nhbs):
+        return CADJ, CADJ_nhbs, CADJ_nhbs_size
+
     PCADJ = CADJ.copy().tolil()
     PCADJ_nhbs = [list(nhbs) for nhbs in CADJ_nhbs]
     PCADJ_nhbs_size = CADJ_nhbs_size.copy()
@@ -226,11 +238,13 @@ def CADJ_self_tuning_kernel(
     W: np.ndarray,
     CADJ: sp.spmatrix,
     CADJ_nhbs: list[list[int]] | None = None,
+    CADJ_nhbs_size: np.ndarray | None = None,
     min_similarity: float = 0.01,
-    min_neighbors: int = 3,
+    min_nhbs: int = 3,
+    support: str = "dense",
 ) -> sp.csr_matrix:
     """
-    Full-pairwise self-tuning similarity kernel with CADJ-derived bandwidths.
+    Self-tuning similarity kernel with CADJ-derived bandwidths.
 
     Computes a symmetric M×M kernel matrix where the similarity between
     prototypes i and j is::
@@ -243,57 +257,79 @@ def CADJ_self_tuning_kernel(
     produce large sigma values (broad kernel), making cluster boundaries
     visible without manual bandwidth selection.
 
-    The kernel is evaluated for **all** (i, j) pairs regardless of whether
-    CADJ[i, j] is nonzero.  CADJ enters only through sigma_i, not through
-    the sparsity pattern.  This allows the Euclidean views (high-D and low-D)
-    to introduce edges that CADJ did not encode, which is the intent of the
-    multi-view fusion in ``mpec``.
+    The ``support`` parameter controls which (i, j) pairs are evaluated:
 
-    **Sparsification.**  Entries with K[i, j] < ``min_similarity`` are set to
-    zero.  Because K[i, j] is already normalized by sigma_i * sigma_j in the
-    exponent, a fixed cutoff on K values is effectively adaptive: K[i, j] = c
-    means the same relative distance regardless of local scale.  Each row is
-    guaranteed at least ``min_neighbors`` nonzero off-diagonal entries,
-    overriding the threshold if necessary.
+    - ``support="dense"`` (default): kernel evaluated for all M×M pairs.
+      CADJ enters only through sigma_i, not through the sparsity pattern,
+      allowing the kernel to introduce edges that CADJ did not encode.
+    - ``support="CADJ"``: kernel evaluated only for pairs where CADJ[i, j] > 0
+      (after padding via :func:`pad_CADJ` to ensure every row has at least
+      ``min_nhbs`` entries).  Much cheaper for large M when CADJ is sparse.
+
+    In both cases :func:`pad_CADJ` is called first (cheaply — a no-op if all
+    rows already satisfy ``>= min_nhbs``) so that sigma computation never
+    falls back to the median heuristic.
+
+    **Sparsification.**  After kernel evaluation, entries with
+    K[i, j] < ``min_similarity`` are set to zero.  Each row is guaranteed
+    at least ``min_nhbs`` nonzero off-diagonal entries, overriding the
+    threshold if necessary.
 
     **Symmetry.**  The kernel formula is symmetric by construction, but the
-    per-row ``min_neighbors`` guarantee can break exact symmetry in edge cases.
-    The output is explicitly symmetrised as ``(K + K.T) / 2``.
+    per-row ``min_nhbs`` guarantee can break exact symmetry in edge cases.
+    The output is explicitly symmetrized as ``(K + K.T) / 2``.
 
     **Diagonal.**  Returned as 1.0 (K[i, i] = exp(0) = 1).  The caller is
     responsible for zeroing or ignoring it if needed (e.g., igraph's
     ``graph_adjacency`` accepts a ``diag=False`` argument).
 
     .. note::
-       Distance computation uses ``scipy.spatial.distance.pdist``, which
-       computes only the M*(M-1)/2 unique pairs and is therefore both faster
-       and more memory-efficient than a full ``cdist(W, W)`` call.  The result
-       is expanded to a full (M, M) matrix via ``squareform`` for the
-       subsequent kernel and masking steps.  For M ≳ 5 000 the squareform
-       matrix itself (~200 MB at float64) may become a bottleneck; chunked or
-       approximate-NN approaches can be substituted in a future version.
+       ``support="dense"`` uses ``scipy.spatial.distance.pdist`` to compute
+       only the M*(M-1)/2 unique pairs, then ``squareform`` to expand to
+       (M, M).  For M ≳ 5 000 the squareform matrix (~200 MB at float64)
+       may become a bottleneck; use ``support="CADJ"`` instead.
+
+       ``support="CADJ"`` extracts nonzero (i, j) index pairs directly from
+       the CSR structure and computes distances for those pairs in a single
+       vectorized operation, avoiding any O(M²) dense intermediate.
+
+       Both branches share a post-evaluation sparsification step that loops
+       over M rows to apply the ``min_similarity`` threshold and enforce the
+       ``min_nhbs`` per-row guarantee.  This loop is O(M) in the number of
+       iterations (not O(M²) or O(nnz)), and operates on short per-row
+       arrays extracted from the LIL sparse format.
 
     Parameters
     ----------
     W : np.ndarray, shape (M, d)
         Prototype matrix.
     CADJ : scipy.sparse matrix, shape (M, M)
-        Asymmetric co-adjacency matrix.  Used only to compute sigma_i via
-        :func:`CADJ_sigmas`; does not gate which pairs receive a kernel value.
-        Should be padded (via :func:`pad_CADJ`) before calling so that no row
-        is empty.
+        Asymmetric co-adjacency matrix.  Used to compute sigma_i via
+        :func:`CADJ_sigmas` and, when ``support="CADJ"``, to determine
+        which pairs receive a kernel value.
     CADJ_nhbs : list of list of int, length M, optional
         Precomputed neighbor index lists.  Passed through to
-        :func:`CADJ_sigmas`; derived from CADJ's CSR structure if ``None``.
+        :func:`CADJ_sigmas` and :func:`pad_CADJ`; derived from CADJ's CSR
+        structure if ``None``.
+    CADJ_nhbs_size : np.ndarray, shape (M,), dtype int, optional
+        Number of neighbors per prototype.  Required by :func:`pad_CADJ`
+        to determine which rows need padding.  Derived from CADJ's CSR
+        structure if ``None``.
     min_similarity : float, default 0.01
         Hard lower bound on kernel values retained after sparsification.
         Entries with K[i, j] < ``min_similarity`` are set to zero.
         Because K values are in (0, 1], this is equivalent to discarding
         pairs whose normalized squared distance exceeds
         ``-log(min_similarity) * sigma_i * sigma_j``.
-    min_neighbors : int, default 3
-        Minimum number of nonzero off-diagonal entries guaranteed per row
-        after sparsification, regardless of ``min_similarity``.
+    min_nhbs : int, default 3
+        Minimum number of nonzero off-diagonal entries guaranteed per row,
+        both for padding (passed to :func:`pad_CADJ` as ``min_nhbs``) and
+        for the post-sparsification guarantee.
+    support : {"dense", "CADJ"}, default "dense"
+        Which (i, j) pairs to evaluate the kernel for:
+
+        - ``"dense"``: all M×M pairs (original behavior).
+        - ``"CADJ"``: only pairs where CADJ[i, j] > 0 after padding.
 
     Returns
     -------
@@ -305,45 +341,105 @@ def CADJ_self_tuning_kernel(
     Zelnik-Manor, L. & Perona, P. (2004). Self-tuning spectral clustering.
         Advances in Neural Information Processing Systems, 17.
     """
+    if support not in ("dense", "CADJ"):
+        raise ValueError(f"support must be 'dense' or 'CADJ', got {support!r}")
+
     M = W.shape[0]
 
-    # --- Step 1: per-prototype bandwidths ------------------------------------
-    sigma = CADJ_sigmas(W=W, CADJ=CADJ, CADJ_nhbs=CADJ_nhbs)  # shape (M,)
+    # --- Step 1: pad CADJ if needed (no-op if all rows already >= min_nhbs) --
+    CADJ_csr = CADJ.tocsr()
+    if CADJ_nhbs is None:
+        CADJ_nhbs = [
+            CADJ_csr.indices[CADJ_csr.indptr[i]:CADJ_csr.indptr[i + 1]].tolist()
+            for i in range(M)
+        ]
+    if CADJ_nhbs_size is None:
+        CADJ_nhbs_size = np.diff(CADJ_csr.indptr).astype(int)
 
-    # --- Step 2: pairwise squared distances ----------------------------------
-    # pdist computes only the M*(M-1)/2 unique pairs (upper triangle),
-    # halving computation vs cdist(W, W).  squareform expands to (M, M).
-    D2 = squareform(pdist(W, metric="sqeuclidean"))  # shape (M, M), float64
+    PCADJ, PCADJ_nhbs, _ = pad_CADJ(
+        CADJ=CADJ_csr,
+        CADJ_nhbs=CADJ_nhbs,
+        CADJ_nhbs_size=CADJ_nhbs_size,
+        W=W,
+        min_nhbs=min_nhbs,
+    )
 
-    # --- Step 3: self-tuning kernel ------------------------------------------
-    # Sequential broadcast division avoids allocating a full (M, M) scales
-    # matrix (np.outer(sigma, sigma)):
-    #   D2 / sigma[:, None]  divides each row i by sigma_i
-    #   / sigma[None, :]     divides each column j by sigma_j
-    # giving  D2[i,j] / (sigma_i * sigma_j)  without an intermediate M×M array.
-    K = np.exp(-D2 / sigma[:, None] / sigma[None, :])  # shape (M, M)
+    # --- Step 2: per-prototype bandwidths ------------------------------------
+    sigma = CADJ_sigmas(W=W, CADJ=PCADJ, CADJ_nhbs=PCADJ_nhbs)  # shape (M,)
 
-    # --- Step 4: sparsification ----------------------------------------------
-    mask = K < min_similarity  # True where we want to zero out
+    # --- Step 3: kernel evaluation -------------------------------------------
+    if support == "dense":
+        # Compute all M*(M-1)/2 unique pairs via pdist, expand to (M, M).
+        D2 = squareform(pdist(W, metric="sqeuclidean"))  # shape (M, M)
 
-    # Guarantee at least min_neighbors off-diagonal entries per row.
-    # For rows where the threshold would leave too few entries, force-keep
-    # the closest prototypes by squared Euclidean distance.
-    n_kept = (~mask).sum(axis=1) - 1  # subtract 1 to exclude diagonal
-    under = np.where(n_kept < min_neighbors)[0]
-    for i in under:
-        order = np.argsort(D2[i])      # ascending distance; index 0 is self
-        force_keep = order[1: min_neighbors + 1]
-        mask[i, force_keep] = False
+        # Sequential broadcast avoids allocating np.outer(sigma, sigma):
+        #   D2 / sigma[:, None]  divides each row i by sigma_i
+        #   / sigma[None, :]     divides each column j by sigma_j
+        K_dense = np.exp(-D2 / sigma[:, None] / sigma[None, :])  # (M, M)
+        del D2
 
-    K[mask] = 0.0
+        K_sparse = sp.csr_matrix(K_dense)
+        del K_dense
 
-    # --- Step 5: symmetrise --------------------------------------------------
-    # Convert to sparse before symmetrisation to avoid holding two dense
-    # M×M float64 arrays simultaneously.
-    K_sparse = sp.csr_matrix(K)
-    del K, D2, mask  # free dense buffers
+    else:  # support == "CADJ"
+        # Extract nonzero (i, j) pairs from padded CADJ's CSR structure.
+        row_idx, col_idx = PCADJ.nonzero()
 
+        # Vectorized squared Euclidean distances for all nonzero pairs:
+        #   diffs[k] = W[row_idx[k]] - W[col_idx[k]], shape (nnz, d)
+        # einsum 'ij,ij->i' is a row-wise dot product — faster than
+        # (diffs ** 2).sum(axis=1) and avoids a temporary (nnz, d) square.
+        diffs = W[row_idx] - W[col_idx]
+        sq_dists = np.einsum("ij,ij->i", diffs, diffs)
+        del diffs
+
+        # Kernel values for each nonzero pair, shape (nnz,)
+        K_vals = np.exp(-sq_dists / (sigma[row_idx] * sigma[col_idx]))
+
+        # Assemble into sparse matrix directly from COO data
+        K_sparse = sp.csr_matrix((K_vals, (row_idx, col_idx)), shape=(M, M))
+
+    # --- Step 4: sparsification (shared) -------------------------------------
+    # Work in LIL format for efficient per-row threshold + min_nhbs guarantee.
+    # Force-keep logic uses kernel values directly (higher K = closer prototype)
+    # avoiding the need for a separate distance matrix in either branch.
+    K_lil = K_sparse.tolil()
+    del K_sparse
+
+    for i in range(M):
+        row_data = np.array(K_lil.data[i], dtype=float)
+        row_cols = np.array(K_lil.rows[i], dtype=int)
+
+        if len(row_data) == 0:
+            continue
+
+        # Off-diagonal mask
+        off_diag = row_cols != i
+
+        # Apply min_similarity threshold to off-diagonal entries
+        keep_off = (row_data >= min_similarity) & off_diag
+        n_kept = int(keep_off.sum())
+
+        # If too few off-diagonal entries survive, force-keep the strongest
+        # (highest K value = geometrically closest) among those available
+        if n_kept < min_nhbs:
+            off_diag_vals = row_data[off_diag]
+            off_diag_cols = row_cols[off_diag]
+            n_force = min(min_nhbs, len(off_diag_vals))
+            top_k = np.argpartition(off_diag_vals, -n_force)[-n_force:]
+            forced_cols = set(off_diag_cols[top_k].tolist())
+            keep_off = keep_off | (off_diag & np.isin(row_cols, list(forced_cols)))
+
+        # Diagonal entry (if present) is always kept; off-diagonal filtered
+        keep = (~off_diag) | keep_off
+        row_data[~keep] = 0.0
+        K_lil.data[i] = row_data.tolist()
+
+    K_sparse = K_lil.tocsr()
+    K_sparse.eliminate_zeros()
+    del K_lil
+
+    # --- Step 5: symmetrize --------------------------------------------------
     K_sym = (K_sparse + K_sparse.T) / 2.0
 
     return K_sym
