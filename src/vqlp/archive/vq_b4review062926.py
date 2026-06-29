@@ -11,11 +11,9 @@ from scipy.optimize import minimize
 from scipy.spatial.distance import pdist, squareform
 
 try:
-    import faiss as _faiss_module
-    _FAISS_AVAILABLE = True
+    import faiss
 except ImportError:
-    _faiss_module = None
-    _FAISS_AVAILABLE = False
+    raise ImportError("VQRecaller and VQFitter require FAISS. Install with: pip install faiss-cpu")
 
 __all__ = [
     "VQRecaller",
@@ -25,39 +23,17 @@ __all__ = [
 class VQRecaller:
     """
     Recall analysis for Vector Quantizer results.
-
+    
     Computes and stores analysis products from applying a set of prototypes
     to data, including Best Matching Units, connectivity matrices, receptive
     fields, and reconstruction capabilities.
-
+    
     Nearest-prototype search is performed via FAISS, which supports arbitrary
     Lp metrics. Both exact (flat) and approximate (IVF) search are available
     via the index_type parameter.
-
+    
     Note: FAISS operates in float32 internally. Input data is cast to float32
     for the search step regardless of input dtype.
-
-    Terminology
-    -----------
-    Prototype (W[m]) : One of M representative vectors in feature space,
-        also called a codebook vector or neuron.  Shape (d,).
-    BMU (Best Matching Unit) : The prototype closest to a given observation
-        under the chosen Lp metric.  A 2nd BMU, 3rd BMU, etc. are the next
-        closest prototypes.  Controlled by ``max_bmu``.
-    QE (Quantization Error) : The Lp distance from an observation to its
-        assigned BMU.  Lower is better; zero means the observation sits
-        exactly on a prototype.
-    RF (Receptive Field) : The set of observations for which a given
-        prototype is the 1st BMU.  Analogous to a Voronoi cell.
-    RFSize : The number of observations in each prototype's receptive field.
-        A prototype with RFSize == 0 is "dead" (no data point maps to it).
-    CADJ (Co-Adjacency matrix) : An M×M integer matrix where CADJ[i, j]
-        counts the number of observations whose 1st BMU is prototype i and
-        whose 2nd BMU is prototype j.  Asymmetric by construction.  Encodes
-        the directed manifold neighborhood of the codebook.
-    CONN (Connectivity matrix) : The symmetric version of CADJ:
-        CONN = CADJ + CADJ^T.  Used for undirected neighborhood queries.
-        CONN[i, j] > 0 means prototypes i and j are topological neighbors.
     """
     
     def __init__(self, p=2, max_bmu=2, index_type="flat", nlist=None, nprobe=None, verbose=True):
@@ -237,13 +213,6 @@ class VQRecaller:
 
     def _build_index(self, W_f32):
         """Build and populate the FAISS index for prototype set W."""
-        if not _FAISS_AVAILABLE:
-            raise ImportError(
-                "FAISS is required for nearest-neighbor search but is not installed. "
-                "Install it with: pip install faiss-cpu"
-            )
-        faiss = _faiss_module  # local alias for readability
-
         if self.index_type == "flat":
             index = faiss.IndexFlat(self._d, faiss.METRIC_Lp)
             index.metric_arg = float(self.p)
@@ -341,11 +310,8 @@ class VQRecaller:
             return
 
         # Each observation votes for an edge from its 1st BMU to its 2nd BMU.
-        # csr_matrix((data, (rows, cols))) places data[k] at CADJ[rows[k], cols[k]],
-        # so rows must carry the 1st BMU and cols the 2nd BMU to satisfy the
-        # definition CADJ[i, j] = #{obs : 1st BMU = i, 2nd BMU = j}.
-        rows = self.BMU[:, 0]          # 1st BMU → row of CADJ
-        cols = self.BMU[:, 1]          # 2nd BMU → col of CADJ
+        rows = self.BMU[:, 1]          # 2nd BMU → row of CADJ
+        cols = self.BMU[:, 0]          # 1st BMU → col of CADJ
         data = np.ones(self._N, dtype=int)
         self.CADJ = csr_matrix((data, (rows, cols)), shape=(self._M, self._M))
 
@@ -453,15 +419,8 @@ class VQRecaller:
         for i in np.where(active)[0]:
             WL[i] = WL_unq[winner_cols[i]]
             p_winner = WL_Dist[i, winner_cols[i]]
-            # Hellinger distance between the prototype's label distribution q
-            # and the ideal one-hot e_winner is:
-            #   H(q, e) = (1/sqrt(2)) * sqrt( sum_k (sqrt(q_k) - sqrt(e_k))^2 )
-            # For a one-hot e_winner the sum collapses to:
-            #   H^2 * 2 = (sqrt(p_winner) - 1)^2 + (1 - p_winner)
-            #           = 2 - 2*sqrt(p_winner)
-            # => H = sqrt(1 - sqrt(p_winner))
-            # Purity is defined as 1 - H, so it equals 1 for a pure prototype
-            # (all mass on one label) and 0 for an empty RF.
+            # Hellinger distance to a perfect one-hot: sqrt(1 - sqrt(p_winner))
+            # Purity = 1 - hell_dist (similarity, not distance)
             hell_dist = np.sqrt(max(0.0, 1.0 - np.sqrt(p_winner)))
             WL_Purity[i] = 1.0 - hell_dist
 
@@ -490,10 +449,8 @@ class VQRecaller:
             Data matrix to reconstruct with N observations and d features
         method : str, default="hard"
             Reconstruction method:
-            - "hard": Use closest prototype for each observation (respects self.p)
-            - "soft": Weighted average using UMAP-style local connectivity.
-              Always uses Euclidean (L2) distances internally; see
-              _reconstruct_soft for rationale.
+            - "hard": Use closest prototype for each observation
+            - "soft": Weighted average using UMAP-style local connectivity
             
         Returns
         -------
@@ -526,15 +483,7 @@ class VQRecaller:
         return W[first_bmu_indices].astype(X.dtype)
     
     def _reconstruct_soft(self, X, W):
-        """Soft reconstruction using UMAP-style weighted averaging.
-
-        Note: distances to local prototypes are always computed with the
-        Euclidean (L2) metric, regardless of self.p.  This is intentional:
-        the UMAP perplexity-based bandwidth calibration (exp_kernel_bw_perplexity)
-        is defined in terms of Euclidean distances, and the reconstruction is
-        a geometric interpolation in feature space rather than a strict Lp
-        operation.  If you need Lp-consistent reconstruction, use method='hard'.
-        """
+        """Soft reconstruction using UMAP-style weighted averaging."""
         if X.dtype != np.float32:
             X = X.astype(np.float32)
         
@@ -578,31 +527,10 @@ class VQRecaller:
     def get_summary(self):
         """
         Get a summary of the recall analysis results.
-
+        
         Returns
         -------
-        dict
-            Summary statistics with the following keys:
-
-            Always present after recall():
-              - ``"M"`` : int — number of prototypes
-              - ``"N"`` : int — number of observations
-              - ``"d"`` : int — feature dimensionality
-              - ``"p_norm"`` : float — Lp order used
-              - ``"max_bmu"`` : int — number of BMUs tracked
-              - ``"index_type"`` : str — FAISS index type used
-              - ``"mean_quantization_error"`` : float — mean QE over 1st BMUs
-              - ``"empty_prototypes"`` : int — number of prototypes with no observations
-              - ``"largest_rf_size"`` : int — size of the largest receptive field
-              - ``"connectivity_edges"`` : int — number of unique CONN edges (nnz // 2)
-              - ``"mean_connectivity_degree"`` : float — mean number of CONN neighbors
-              - ``"max_connectivity_degree"`` : int — max number of CONN neighbors
-
-            Present only after recall_labels():
-              - ``"n_unique_labels"`` : int
-              - ``"labeled_prototypes"`` : int — prototypes with non-empty RF
-              - ``"mean_label_purity"`` : float — Hellinger-based purity, mean over active prototypes
-              - ``"min_label_purity"`` : float — worst-case purity over active prototypes
+        dict : Summary statistics
         """
         if self.BMU is None:
             return {"status": "No recall analysis performed"}
@@ -636,42 +564,10 @@ class VQRecaller:
 class VQFitter:
     """
     Vector Quantizer Fitter using arbitrary Lp distance metrics.
-
+    
     Supports multiple fitting algorithms including random sampling,
     IRLS (Iteratively Reweighted Least Squares), gradient descent (GD),
     PAM (Partitioning Around Medoids), and FAISS k-means (p=2 only).
-
-    Typical workflow
-    ----------------
-    1. Instantiate with the desired number of prototypes M and Lp order p::
-
-           fitter = VQFitter(M=20, p=2, random_state=42)
-
-    2. Fit prototypes to a data matrix X of shape (N, d)::
-
-           fitter.fit(X)          # defaults to k-means for p=2, IRLS otherwise
-
-    3. Run recall analysis to compute BMU assignments, receptive fields,
-       connectivity, etc.  Call with no arguments to analyze the training
-       data, or pass new X to analyze held-out data::
-
-           fitter.recall()        # training data
-           fitter.recall(X_test)  # new data
-
-    4. Inspect results via the embedded VQRecaller object::
-
-           recaller = fitter.recaller
-           print(recaller.BMU)       # shape (N, max_bmu)
-           print(recaller.QE)        # quantization errors
-           print(recaller.RFSize)    # receptive field sizes
-           print(recaller.CONN)      # sparse connectivity matrix
-
-    5. Optionally reconstruct data::
-
-           X_hard = recaller.reconstruct(fitter.W, X, method='hard')
-           X_soft = recaller.reconstruct(fitter.W, X, method='soft')
-
-    See VQRecaller for definitions of BMU, QE, RF, CADJ, and CONN.
     """
     
     AVAILABLE_METHODS = ["random", "IRLS", "GD", "PAM", "kmeans"]
@@ -688,11 +584,8 @@ class VQFitter:
             Order of the Lp distance metric (e.g., 1 for Manhattan, 2 for Euclidean)
         max_bmu : int, default=2
             Number of Best Matching Units (closest prototypes) to track
-        random_state : int or None, optional
-            Seed for the instance-local random number generator. Reproducible
-            results are guaranteed without touching the global NumPy random
-            state, so multiple VQFitter instances with different seeds can
-            coexist safely.
+        random_state : int, optional
+            Random seed for reproducible results
         verbose : bool, default=True
             If True, print progress messages during fitting and recall.
             Set to False to suppress all terminal output.
@@ -703,12 +596,10 @@ class VQFitter:
         self.random_state = random_state
         self.verbose = verbose
         self.W = None  # Prototype matrix (M, d)
-
-        # Use an instance-local Generator rather than np.random.seed(), which
-        # would mutate the global NumPy random state and interfere with other
-        # code (other VQFitter instances, user code, etc.).
-        self._rng = np.random.default_rng(self.random_state)
-
+        
+        if self.random_state is not None:
+            np.random.seed(self.random_state)
+        
         # VQRecaller instance for BMU tracking during fitting
         self.recaller = VQRecaller(p=self.p, max_bmu=self.max_bmu, verbose=self.verbose)
     
@@ -777,7 +668,7 @@ class VQFitter:
             Training data
         """
         N = X.shape[0]
-        indices = self._rng.choice(N, size=self.M, replace=False)
+        indices = np.random.choice(N, size=self.M, replace=False)
         self.W = X[indices].copy()
         self.recaller.update_BMU(X, self.W)
         if self.verbose:
@@ -868,13 +759,11 @@ class VQFitter:
             if len(cluster_points) == 0:
                 continue
             
-            # Add tiny perturbation to avoid singularities at exact prototype locations
-            W_perturbed = self.W[j] + self._rng.normal(0, 1e-12, self.W[j].shape)
+            # Add tiny perturbation to avoid singularities
+            W_perturbed = self.W[j] + np.random.normal(0, 1e-12, self.W[j].shape)
             diff = cluster_points - W_perturbed
             
             distances = lp_norm_stable(diff, self.p)
-            # lp_norm_stable returns shape (n_cluster, 1) due to keepdims=True;
-            # the comparison and ** below broadcast correctly over that shape.
             distances[distances < 1e-12] = 1e-12
 
             weights = distances ** (1 - self.p)
@@ -1057,12 +946,6 @@ class VQFitter:
                 "init_method='current' requires W to be set first via "
                 "set_prototypes() or a prior fit() call."
             )
-        if not _FAISS_AVAILABLE:
-            raise ImportError(
-                "FAISS is required for k-means fitting but is not installed. "
-                "Install it with: pip install faiss-cpu"
-            )
-        faiss = _faiss_module  # local alias for readability
 
         d = X.shape[1]
         X_f32 = np.ascontiguousarray(X, dtype=np.float32)
@@ -1149,16 +1032,11 @@ class VQFitter:
     def recall(self, X=None, labels=None):
         """
         Perform recall analysis using the fitted prototypes.
-
-        This is a convenience wrapper around VQRecaller.recall().
-        The key difference from calling self.recaller.recall() directly is
-        that W is always taken from self.W (the fitted prototypes), so you
-        never need to pass it explicitly here.
-
-        If X is provided, performs recall analysis on new (e.g. held-out) data.
-        If X is None, finalizes recall analysis on the training data (BMU was
-        already updated incrementally during fitting).
-
+        
+        If X is provided, performs recall analysis on new data.
+        If X is None, finalizes recall analysis on training data (assuming
+        BMU has been computed during fitting).
+        
         Parameters
         ----------
         X : array-like, shape (N, d), optional
@@ -1167,16 +1045,11 @@ class VQFitter:
             Observation labels. Any hashable type is accepted (int, str, float,
             etc.). If provided, recall_labels() is called automatically after
             the main recall pipeline to compute WL, WL_Dist, and WL_Purity.
-
+            
         Returns
         -------
         self : VQFitter
-            Returns self for method chaining.
-
-        See Also
-        --------
-        VQRecaller.recall : The underlying recall method, which also accepts
-            explicit W and p arguments for use outside of VQFitter.
+            Returns self for method chaining
         """
         if self.W is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
@@ -1192,20 +1065,10 @@ class VQFitter:
     def get_summary(self):
         """
         Get a summary of the fitted model and recall analysis.
-
+        
         Returns
         -------
-        dict
-            Summary statistics.  Keys always present:
-              - ``"fitted"`` : bool — whether prototypes have been computed
-              - ``"M"`` : int — number of prototypes
-              - ``"d"`` : int or None — feature dimensionality (None if not yet fitted)
-              - ``"p_norm"`` : float — Lp order
-              - ``"max_bmu"`` : int — number of BMUs tracked
-              - ``"random_state"`` : int or None — seed used
-
-            If recall() has been called, all keys from VQRecaller.get_summary()
-            are also included (MQE, RF sizes, connectivity stats, etc.).
+        dict : Summary statistics
         """
         summary = {
             "fitted": self.W is not None,

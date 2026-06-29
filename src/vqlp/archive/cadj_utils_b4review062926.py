@@ -5,7 +5,7 @@ Utilities for the Cumulative Adjacency matrix of Prototypes (CADJ).
 
 CADJ[i, j] counts the number of data points for which prototype i was
 the first Best Matching Unit (BMU) and prototype j was the second, giving
-a directed, density-weighted view of prototype neighborhood topology.
+a directed, density-weighted view of prototype neighbourhood topology.
 
 Functions
 ---------
@@ -15,11 +15,11 @@ pad_CADJ
 
 CADJ_sigmas
     Compute the per-prototype local bandwidth sigma_i: the CADJ-weighted
-    mean Euclidean distance from prototype i to its CADJ neighbors.
+    mean Euclidean distance from prototype i to its CADJ neighbours.
 
 CADJ_self_tuning_kernel
     Full-pairwise self-tuning similarity kernel (Zelnik-Manor & Perona,
-    2004) with bandwidths derived from CADJ neighborhood structure.
+    2004) with bandwidths derived from CADJ neighbourhood structure.
 
 References
 ----------
@@ -60,7 +60,7 @@ def pad_CADJ(
     entries.
 
     Rows already satisfying the threshold are never touched.  For any
-    prototype i with fewer than ``min_nhbs`` neighbors, synthetic directed
+    prototype i with fewer than ``min_nhbs`` neighbours, synthetic directed
     edges with weight ``fill_val`` are added to the nearest (by Euclidean
     distance in W-space) unconnected prototypes.  Padding is one-directional:
     only row i is modified, preserving CADJ's asymmetric nature.
@@ -71,9 +71,9 @@ def pad_CADJ(
         Asymmetric co-adjacency matrix from VQRecaller.  A copy is made
         internally; the original is never mutated.
     CADJ_nhbs : list of list of int, length M
-        Precomputed neighbor index lists (nonzero column indices per row).
+        Precomputed neighbour index lists (nonzero column indices per row).
     CADJ_nhbs_size : np.ndarray, shape (M,), dtype int
-        Number of neighbors per prototype (``len(CADJ_nhbs[i])`` for each i).
+        Number of neighbours per prototype (``len(CADJ_nhbs[i])`` for each i).
     W : np.ndarray, shape (M, d)
         Prototype matrix.  Used to find geometrically nearest candidates for
         synthetic edges.
@@ -104,7 +104,7 @@ def pad_CADJ(
     PCADJ_nhbs : list of list of int, length M
         Neighbour index lists for each row of PCADJ.
     PCADJ_nhbs_size : np.ndarray, shape (M,), dtype int
-        Number of neighbors per prototype in PCADJ.
+        Number of neighbours per prototype in PCADJ.
     """
     PCADJ = CADJ.copy().tolil()
     PCADJ_nhbs = [list(nhbs) for nhbs in CADJ_nhbs]
@@ -150,18 +150,18 @@ def CADJ_sigmas(
     Compute the per-prototype local bandwidth sigma_i from CADJ.
 
     For each prototype i, sigma_i is the CADJ-weighted mean Euclidean
-    distance from W[i] to its CADJ neighbors::
+    distance from W[i] to its CADJ neighbours::
 
         sigma_i = sum_j( CADJ[i,j] * dist(W[i], W[j]) )
                   / sum_j( CADJ[i,j] )
 
     This gives a locally adaptive scale that reflects the typical reach of
-    prototype i's data-manifold neighborhood.  Strongly populated CADJ
+    prototype i's data-manifold neighbourhood.  Strongly populated CADJ
     edges (many data points co-mapped to the i-j pair) dominate the
     weighted mean, so sigma_i is driven by the dense core of the
-    neighborhood rather than by sparse boundary connections.
+    neighbourhood rather than by sparse boundary connections.
 
-    Prototypes with no CADJ neighbors receive the median sigma of all
+    Prototypes with no CADJ neighbours receive the median sigma of all
     well-connected prototypes (falling back to 1.0 if all rows are empty).
     If the caller has already padded CADJ with ``pad_CADJ``, no row will be
     empty and the fallback is never triggered.
@@ -174,7 +174,7 @@ def CADJ_sigmas(
         Asymmetric co-adjacency matrix.  Should be in CSR format for
         efficient row slicing; converted internally if not.
     CADJ_nhbs : list of list of int, length M, optional
-        Precomputed neighbor index lists.  If ``None``, derived from the
+        Precomputed neighbour index lists.  If ``None``, derived from the
         nonzero structure of CADJ (``CADJ.indices`` / ``CADJ.indptr``).
         Passing the precomputed lists avoids the CSR index extraction but
         is otherwise equivalent.
@@ -187,7 +187,7 @@ def CADJ_sigmas(
     CADJ_csr = CADJ.tocsr()
     M = W.shape[0]
 
-    # Derive neighbor lists from CSR structure if not supplied
+    # Derive neighbour lists from CSR structure if not supplied
     if CADJ_nhbs is None:
         CADJ_nhbs = [
             list(CADJ_csr.indices[CADJ_csr.indptr[i]:CADJ_csr.indptr[i + 1]])
@@ -250,7 +250,7 @@ def CADJ_self_tuning_kernel(
     multi-view fusion in ``mpec``.
 
     **Sparsification.**  Entries with K[i, j] < ``min_similarity`` are set to
-    zero.  Because K[i, j] is already normalized by sigma_i * sigma_j in the
+    zero.  Because K[i, j] is already normalised by sigma_i * sigma_j in the
     exponent, a fixed cutoff on K values is effectively adaptive: K[i, j] = c
     means the same relative distance regardless of local scale.  Each row is
     guaranteed at least ``min_neighbors`` nonzero off-diagonal entries,
@@ -283,13 +283,13 @@ def CADJ_self_tuning_kernel(
         Should be padded (via :func:`pad_CADJ`) before calling so that no row
         is empty.
     CADJ_nhbs : list of list of int, length M, optional
-        Precomputed neighbor index lists.  Passed through to
+        Precomputed neighbour index lists.  Passed through to
         :func:`CADJ_sigmas`; derived from CADJ's CSR structure if ``None``.
     min_similarity : float, default 0.01
         Hard lower bound on kernel values retained after sparsification.
         Entries with K[i, j] < ``min_similarity`` are set to zero.
         Because K values are in (0, 1], this is equivalent to discarding
-        pairs whose normalized squared distance exceeds
+        pairs whose normalised squared distance exceeds
         ``-log(min_similarity) * sigma_i * sigma_j``.
     min_neighbors : int, default 3
         Minimum number of nonzero off-diagonal entries guaranteed per row
