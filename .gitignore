@@ -33,3 +33,12 @@ gitdeploy.sh
 
 
 
+
+# MkDocs build output
+site/
+
+# MkDocs cache
+.cache/
+
+# Archived / superseded source files
+src/vqlp/archive/
