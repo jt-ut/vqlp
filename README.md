@@ -117,6 +117,14 @@ Cosmic AI · Oden Institute for Computational Engineering & Sciences · The Univ
 
 ---
 
+## Documentation
+
+Full documentation and a worked tutorial is available at:
+
+**[https://jt-ut.github.io/vqlp](https://jt-ut.github.io/vqlp)**
+
+---
+
 ## Citation
 
 No associated paper yet. <!-- TODO: add citation / BibTeX once published -->
