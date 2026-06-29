@@ -113,8 +113,7 @@ Released under the MIT License — see [`LICENSE`](LICENSE).
 ## Author
 
 **Josh Taylor**
-Cosmic AI · Oden Institute for Computational Engineering & Sciences
-The University of Texas at Austin
+Cosmic AI · Oden Institute for Computational Engineering & Sciences · The University of Texas at Austin
 
 ---
 
