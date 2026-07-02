@@ -1,4 +1,5 @@
 import numpy as np
+import h5py
 from scipy.sparse import csr_matrix
 from scipy.spatial.distance import cdist
 from .utils import (
@@ -575,6 +576,266 @@ class VQRecaller:
             print("Soft reconstruction complete.")
         return QX
     
+    # ------------------------------------------------------------------
+    # Persistence helpers (private)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _save_sparse(group, name, matrix):
+        """Write a csr_matrix into an HDF5 subgroup."""
+        sg = group.create_group(name)
+        csr = matrix.tocsr()
+        sg.create_dataset("data",    data=csr.data)
+        sg.create_dataset("indices", data=csr.indices)
+        sg.create_dataset("indptr",  data=csr.indptr)
+        sg.attrs["shape"] = csr.shape
+
+    @staticmethod
+    def _load_sparse(group, name):
+        """Reconstruct a csr_matrix from an HDF5 subgroup."""
+        sg = group[name]
+        return csr_matrix(
+            (sg["data"][:], sg["indices"][:], sg["indptr"][:]),
+            shape=tuple(sg.attrs["shape"]),
+        )
+
+    @staticmethod
+    def _save_ragged(group, name, list_of_lists):
+        """Write a list-of-lists as flat data + CSR-style indptr."""
+        sg = group.create_group(name)
+        flat = np.concatenate([np.asarray(row, dtype=np.int64)
+                               for row in list_of_lists]) \
+               if any(len(r) > 0 for r in list_of_lists) \
+               else np.array([], dtype=np.int64)
+        lengths = np.array([len(r) for r in list_of_lists], dtype=np.int64)
+        indptr  = np.concatenate([[0], np.cumsum(lengths)])
+        sg.create_dataset("data",   data=flat)
+        sg.create_dataset("indptr", data=indptr)
+
+    @staticmethod
+    def _load_ragged(group, name):
+        """Reconstruct a list-of-lists from flat data + indptr."""
+        sg     = group[name]
+        flat   = sg["data"][:]
+        indptr = sg["indptr"][:]
+        return [flat[indptr[i]:indptr[i + 1]].tolist()
+                for i in range(len(indptr) - 1)]
+
+    # ------------------------------------------------------------------
+    # Public persistence API
+    # ------------------------------------------------------------------
+
+    def _save_to_group(self, grp):
+        """Write all VQRecaller state into an open h5py Group ``grp``."""
+        from vqlp import __version__
+        grp.attrs["vqlp_version"] = __version__
+        grp.attrs["class"]        = "VQRecaller"
+
+        # --- Hyperparameters ---
+        grp.attrs["p"]          = self.p
+        grp.attrs["max_bmu"]    = self.max_bmu
+        grp.attrs["index_type"] = self.index_type
+        grp.attrs["verbose"]    = int(self.verbose)
+        # nlist / nprobe may be None (only meaningful for IVF)
+        grp.attrs["nlist"]  = self.nlist  if self.nlist  is not None else -1
+        grp.attrs["nprobe"] = self.nprobe if self.nprobe is not None else -1
+
+        # --- Shape metadata ---
+        for attr in ("_M", "_N", "_d"):
+            val = getattr(self, attr)
+            grp.attrs[attr] = val if val is not None else -1
+
+        # --- Dense arrays (skip if None) ---
+        for name in ("BMU", "QE", "AFF", "RFSize",
+                     "WL_Dist", "WL_Purity", "CADJ_nhbs_size", "CONN_nhbs_size"):
+            val = getattr(self, name)
+            if val is not None:
+                grp.create_dataset(name, data=val)
+
+        # --- WL: object array (None entries for empty RFs) ---
+        # Stored as a string dataset; None → empty string "".
+        # We store the Python type of the non-None elements so we can
+        # cast back correctly on load (WL dtype is always 'object' in numpy
+        # since it holds mixed int/None values).
+        if self.WL is not None:
+            wl_str = np.array(
+                ["" if v is None else str(v) for v in self.WL],
+                dtype=h5py.special_dtype(vlen=str),
+            )
+            grp.create_dataset("WL", data=wl_str)
+            # Store the Python type name of the first non-None element
+            non_none = [v for v in self.WL if v is not None]
+            grp.attrs["WL_elem_type"] = type(non_none[0]).__name__ if non_none else "str"
+
+        # --- WL_unq ---
+        if self.WL_unq is not None:
+            wl_unq_str = np.array(
+                [str(v) for v in self.WL_unq],
+                dtype=h5py.special_dtype(vlen=str),
+            )
+            grp.create_dataset("WL_unq", data=wl_unq_str)
+            grp.attrs["WL_unq_elem_type"] = type(self.WL_unq[0]).__name__ if len(self.WL_unq) > 0 else "str"
+
+        # --- Sparse matrices ---
+        for name in ("CADJ", "CONN"):
+            val = getattr(self, name)
+            if val is not None:
+                self._save_sparse(grp, name, val)
+
+        # --- Ragged lists ---
+        for name in ("RF", "CADJ_nhbs", "CONN_nhbs"):
+            val = getattr(self, name)
+            if val is not None:
+                self._save_ragged(grp, name, val)
+
+    @classmethod
+    def _load_from_group(cls, grp):
+        """Reconstruct a VQRecaller from an open h5py Group ``grp``."""
+        obj = cls.__new__(cls)
+
+        # --- Hyperparameters ---
+        obj.p          = float(grp.attrs["p"])
+        obj.max_bmu    = int(grp.attrs["max_bmu"])
+        obj.index_type = str(grp.attrs["index_type"])
+        obj.verbose    = bool(grp.attrs["verbose"])
+        nlist  = int(grp.attrs.get("nlist",  -1))
+        nprobe = int(grp.attrs.get("nprobe", -1))
+        obj.nlist  = nlist  if nlist  != -1 else None
+        obj.nprobe = nprobe if nprobe != -1 else None
+
+        # --- Shape metadata ---
+        for attr in ("_M", "_N", "_d"):
+            val = int(grp.attrs.get(attr, -1))
+            setattr(obj, attr, val if val != -1 else None)
+
+        # --- Dense arrays ---
+        for name in ("BMU", "QE", "AFF", "RFSize",
+                     "WL_Dist", "WL_Purity", "CADJ_nhbs_size", "CONN_nhbs_size"):
+            setattr(obj, name, grp[name][:] if name in grp else None)
+
+        # --- WL ---
+        if "WL" in grp:
+            raw           = grp["WL"][:]
+            wl_elem_type  = str(grp.attrs.get("WL_elem_type", "str"))
+            result        = np.empty(len(raw), dtype=object)
+            for i, v in enumerate(raw):
+                v_str = v.decode() if isinstance(v, bytes) else str(v)
+                if v_str == "":
+                    result[i] = None
+                elif "int" in wl_elem_type:
+                    result[i] = int(v_str)
+                elif "float" in wl_elem_type:
+                    result[i] = float(v_str)
+                else:
+                    result[i] = v_str
+            obj.WL = result
+        else:
+            obj.WL = None
+
+        # --- WL_unq ---
+        if "WL_unq" in grp:
+            raw                = grp["WL_unq"][:]
+            wl_unq_elem_type   = str(grp.attrs.get("WL_unq_elem_type", "str"))
+            result             = []
+            for v in raw:
+                v_str = v.decode() if isinstance(v, bytes) else str(v)
+                if "int" in wl_unq_elem_type:
+                    result.append(int(v_str))
+                elif "float" in wl_unq_elem_type:
+                    result.append(float(v_str))
+                else:
+                    result.append(v_str)
+            obj.WL_unq = np.array(result)
+        else:
+            obj.WL_unq = None
+
+        # --- Sparse matrices ---
+        for name in ("CADJ", "CONN"):
+            setattr(obj, name,
+                    cls._load_sparse(grp, name) if name in grp else None)
+
+        # --- Ragged lists ---
+        for name in ("RF", "CADJ_nhbs", "CONN_nhbs"):
+            setattr(obj, name,
+                    cls._load_ragged(grp, name) if name in grp else None)
+
+        return obj
+
+    def save(self, path_or_group):
+        """
+        Save the VQRecaller to an HDF5 file or group.
+
+        Parameters
+        ----------
+        path_or_group : str or h5py.Group
+            If a string, opens (or creates) an HDF5 file at that path and
+            writes into its root group.  If an h5py.Group, writes directly
+            into that group — used internally by VQFitter.save() to embed
+            the recaller in the fitter's file.
+
+        Notes
+        -----
+        All attributes are saved regardless of whether recall() has been
+        called; None-valued attributes are simply omitted from the file and
+        restored as None on load.  The package version is stored as a file
+        attribute to assist with forward-compatibility checking.
+
+        See Also
+        --------
+        VQRecaller.load : Reconstruct a VQRecaller from a saved file.
+        VQFitter.save   : Save a VQFitter together with its embedded recaller.
+
+        Examples
+        --------
+        >>> recaller.save("recaller.h5")
+        >>> recaller2 = VQRecaller.load("recaller.h5")
+        """
+        if isinstance(path_or_group, (str, bytes)):
+            with h5py.File(path_or_group, "w") as f:
+                self._save_to_group(f)
+        else:
+            self._save_to_group(path_or_group)
+
+    @classmethod
+    def load(cls, path_or_group):
+        """
+        Load a VQRecaller from an HDF5 file or group.
+
+        Parameters
+        ----------
+        path_or_group : str or h5py.Group
+            If a string, opens the HDF5 file at that path and reads from its
+            root group.  If an h5py.Group, reads directly from that group —
+            used internally by VQFitter.load().
+
+        Returns
+        -------
+        VQRecaller
+            A fully reconstructed instance in whatever state it was in when
+            saved.  No need to instantiate first — call as a classmethod:
+            ``recaller = VQRecaller.load("recaller.h5")``.
+
+        Notes
+        -----
+        Attributes that were None when saved are restored as None.  If the
+        file was saved by an older version of vqlp that lacked a particular
+        attribute, that attribute is set to None rather than raising an error.
+
+        See Also
+        --------
+        VQRecaller.save : Save a VQRecaller to an HDF5 file.
+        VQFitter.load   : Load a VQFitter together with its embedded recaller.
+
+        Examples
+        --------
+        >>> recaller = VQRecaller.load("recaller.h5")
+        """
+        if isinstance(path_or_group, (str, bytes)):
+            with h5py.File(path_or_group, "r") as f:
+                return cls._load_from_group(f)
+        else:
+            return cls._load_from_group(path_or_group)
+
     def get_summary(self):
         """
         Get a summary of the recall analysis results.
@@ -1189,6 +1450,116 @@ class VQFitter:
         
         return self
     
+    def save(self, path):
+        """
+        Save the VQFitter (and its embedded VQRecaller) to an HDF5 file.
+
+        Parameters
+        ----------
+        path : str
+            Path to the HDF5 file to create (or overwrite).
+
+        Notes
+        -----
+        The file contains two top-level groups: ``/fitter`` for the VQFitter's
+        own attributes (hyperparameters and prototype matrix W), and
+        ``/recaller`` for the full VQRecaller state.  This means the embedded
+        recaller is always saved alongside the fitter, in whatever state it is
+        in (including None attributes if recall() has not yet been called).
+
+        The RNG state (``self._rng``) is not saved.  On load, the RNG is
+        re-initialized from ``random_state``, so post-load fitting calls will
+        be reproducible but will not continue from the exact RNG position at
+        save time.
+
+        See Also
+        --------
+        VQFitter.load    : Reconstruct a VQFitter from a saved file.
+        VQRecaller.save  : Save a standalone VQRecaller.
+
+        Examples
+        --------
+        >>> fitter.save("fitter.h5")
+        >>> fitter2 = VQFitter.load("fitter.h5")
+        """
+        from vqlp import __version__
+        with h5py.File(path, "w") as f:
+            f.attrs["vqlp_version"] = __version__
+            f.attrs["class"]        = "VQFitter"
+
+            # --- Fitter group ---
+            fg = f.create_group("fitter")
+            fg.attrs["M"]            = self.M
+            fg.attrs["p"]            = self.p
+            fg.attrs["max_bmu"]      = self.max_bmu
+            fg.attrs["verbose"]      = int(self.verbose)
+            fg.attrs["random_state"] = self.random_state if self.random_state is not None else -1
+
+            if self.W is not None:
+                fg.create_dataset("W", data=self.W)
+
+            # --- Recaller group (always present, may be empty) ---
+            rg = f.create_group("recaller")
+            self.recaller._save_to_group(rg)
+
+    @classmethod
+    def load(cls, path):
+        """
+        Load a VQFitter (and its embedded VQRecaller) from an HDF5 file.
+
+        Parameters
+        ----------
+        path : str
+            Path to an HDF5 file previously created by VQFitter.save().
+
+        Returns
+        -------
+        VQFitter
+            A fully reconstructed instance in whatever state it was in when
+            saved.  Call as a classmethod — no need to instantiate first:
+            ``fitter = VQFitter.load("fitter.h5")``.
+
+        Notes
+        -----
+        The embedded VQRecaller is reconstructed automatically and available
+        as ``fitter.recaller`` immediately after load.  Attributes that were
+        None when saved (e.g. W before fit(), or recall products before
+        recall()) are restored as None.
+
+        The RNG is re-initialized from ``random_state`` rather than restored
+        to its exact saved state.  See VQFitter.save() for details.
+
+        See Also
+        --------
+        VQFitter.save   : Save a VQFitter to an HDF5 file.
+        VQRecaller.load : Load a standalone VQRecaller.
+
+        Examples
+        --------
+        >>> fitter = VQFitter.load("fitter.h5")
+        >>> fitter.W              # prototype matrix, ready to use
+        >>> fitter.recaller.BMU   # recall products, if recall() was called before saving
+        """
+        with h5py.File(path, "r") as f:
+            fg = f["fitter"]
+
+            # Reconstruct without calling __init__
+            obj = cls.__new__(cls)
+            obj.M            = int(fg.attrs["M"])
+            obj.p            = float(fg.attrs["p"])
+            obj.max_bmu      = int(fg.attrs["max_bmu"])
+            obj.verbose      = bool(fg.attrs["verbose"])
+            rs               = int(fg.attrs.get("random_state", -1))
+            obj.random_state = rs if rs != -1 else None
+
+            obj.W   = fg["W"][:] if "W" in fg else None
+            obj._rng = np.random.default_rng(obj.random_state)
+
+            # Reconstruct embedded recaller
+            obj.recaller = VQRecaller._load_from_group(f["recaller"])
+
+        return obj
+
     def get_summary(self):
         """
         Get a summary of the fitted model and recall analysis.
